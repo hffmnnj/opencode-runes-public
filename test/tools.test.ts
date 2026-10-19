@@ -57,7 +57,17 @@ function makeContext(sessionDirs: Record<string, string>, deny?: (action: string
         metadata?: unknown;
         source?: unknown;
       }) => {
-        permissionCalls.push({ action: request.action, resources: request.resources, metadata: request.metadata });
+        // Narrow faithful replica of the native host's Effect AssertInput:
+        // an omitted metadata key is accepted, but an own-property metadata
+        // key carrying undefined is rejected ("Expected object at [metadata]").
+        if (Object.hasOwn(request, "metadata") && request.metadata === undefined) {
+          throw new Error("Expected object at [metadata]");
+        }
+        if (Object.hasOwn(request, "metadata")) {
+          permissionCalls.push({ action: request.action, resources: request.resources, metadata: request.metadata });
+        } else {
+          permissionCalls.push({ action: request.action, resources: request.resources });
+        }
         if (deny?.(request.action, request.resources)) throw new Error(`denied ${request.action}`);
       },
     },
@@ -270,6 +280,27 @@ describe("permissions", () => {
       byName.get("save")!.execute({ manifest: jsManifest("echo-js"), source: JS_SOURCE }, callContext("ses")),
     ).rejects.toThrow("denied edit");
     expect(await new RuneStore(root).list()).toEqual({ runes: [], invalid: 0 });
+  });
+
+  test("permissionAssert_rejectsOwnPropertyMetadataUndefined", async () => {
+    const root = await freshRoot();
+    const { byName, permissionCalls } = await registeredTools({ ses: root });
+    await byName.get("save")!.execute({ manifest: jsManifest("echo-js"), source: JS_SOURCE }, callContext("ses"));
+    await byName.get("list")!.execute({}, callContext("ses"));
+    await byName.get("inspect")!.execute({ name: "echo-js" }, callContext("ses"));
+    await byName.get("run")!.execute({ name: "echo-js", params: {} }, callContext("ses"));
+    await byName.get("migrate")!.execute({}, callContext("ses"));
+    expect(permissionCalls.length).toBeGreaterThan(0);
+    for (const call of permissionCalls) {
+      expect(Object.hasOwn(call, "metadata") && call.metadata === undefined).toBe(false);
+    }
+    // The strict fake itself mirrors the native host: omitted metadata is
+    // accepted, own-property undefined metadata is rejected.
+    const strict = makeContext({ ses: root });
+    await strict.ctx.permission.assert({ sessionID: "ses", action: "read", resources: ["x"] });
+    await expect(
+      strict.ctx.permission.assert({ sessionID: "ses", action: "read", resources: ["x"], metadata: undefined }),
+    ).rejects.toThrow("Expected object at [metadata]");
   });
 });
 

@@ -48,7 +48,8 @@ function authorizerFor(ctx: Plugin.Context, context: CallContext): Authorize {
       agent: context.agent,
       action: request.action,
       resources: request.resources,
-      metadata: request.metadata,
+      // The native codec accepts omission, but rejects a present undefined key.
+      ...(request.metadata === undefined ? {} : { metadata: request.metadata }),
       source: { type: "tool", messageID: context.messageID, id: context.id },
     });
 }
