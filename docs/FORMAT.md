@@ -94,22 +94,98 @@ the caller.
 
 ## Legacy (`argv`) interface
 
-Only Python `argv` semantics are preserved, because the runtime compiles the
-snapshot with the original project-relative filename and original `__file__`,
-so root/sibling data dependencies keep working without executing the original
-bytes. Invocation passes `--key=value` pairs. Non-Python `argv` scripts are
-not executable and are reported unsupported at migration time.
+Python and JS/TS `argv` runes keep their original command-line interface:
+validated params are encoded as `--key=value` pairs by default. The runtime
+executes the approved source snapshot, never the mutable original bytes.
+
+- Python: the snapshot compiles with the original project-relative filename
+  and original `__file__`, so root/sibling data dependencies keep working.
+- JS/TS: the exact-entry source snapshot runs under Node via `registerHooks`
+  (requires Node >= 22.15 / 23.5; tested on 26.9 only). `.cjs` entries load as
+  CommonJS; `.js`/`.mjs`/`.ts` entries load as ESM (`.ts` is transpiled with
+  Bun targeting Node). The original entry URL and `process.argv`
+  (`[execPath, filename, ...argv]`) are preserved; dependencies resolve
+  normally through the host. They are user-authorized trust, not hashed,
+  pinned, or sandboxed. Native JS/TS runes keep the unchanged data-module
+  semantics described above.
+
+Reviewed `legacy.argv` encodings change the default per param (validated by
+contracts.ts; boolean params without a `flag` mapping are rejected as
+ambiguous):
+
+```json
+"legacy": {
+  "path": ".blocks/greet.py",
+  "sha256": "<sha256 of the original source>",
+  "format": "caveman-blocks",
+  "argv": {
+    "verbose": { "mode": "flag" },
+    "quiet": { "mode": "flag", "when": false },
+    "tag": { "mode": "repeat-json" }
+  }
+}
+```
+
+- `flag`: boolean param emitted as a bare `--key` only when the value matches
+  `when ?? true` (so `{ "mode": "flag", "when": false }` emits `--quiet` only
+  when `quiet` is `false`; otherwise nothing is emitted).
+- `repeat-json`: string param holding a JSON array of strings, emitted as one
+  repeated `--key=value` per element (for example `"[\"a\",\"b\"]"` becomes
+  `--tag=a --tag=b`). Non-array or non-string content fails at run time.
+- Any other scalar keeps the default `--key=value` encoding.
 
 ## Migration mapping (`.blocks` → rune)
 
 Only immediate `.blocks/` files with script extensions are candidates; INDEX,
-configs, lockfiles, fixtures, and caches are ignored. Python files need a
-`# /// block` … `# ///` TOML comment header; types map `str` → `string`,
-`int` → `integer`, `float` → `number`, `path` → `path`,
+configs, lockfiles, fixtures, and caches are ignored. Headered unambiguous
+Python converts automatically: a `# /// block` … `# ///` TOML comment header
+maps `str` → `string`, `int` → `integer`, `float` → `number`, `path` → `path`,
 with `min`/`max`/`default`/`required` preserved and `help` becoming the param
-`description`. `bool` params are rejected pending manual `argv` review.
-`example` is preserved as an argv string array. `stamp` and
+`description`. `example` is preserved as an argv string array. `stamp` and
 `allow_effects` are dropped — never migrated as verification or authority.
-Anything else (unsupported script language, schema, field, any boolean param,
+Automatic conversion refuses `bool` params as ambiguous; anything else it
+cannot represent (unsupported script language without override, schema, field,
 oversize header) is reported in `unsupported[]`, never guessed.
 Originals are never modified; provenance goes in `manifest.legacy`.
+
+Headerless files, JS/TS files, and ambiguous booleans need a reviewed
+override in `.opencode/runes-migration.json` (version 1; exact
+`.blocks/<name>.(py|js|ts|mjs|cjs)` keys; never executed as code). Each entry
+is `{ sha256, manifest, adapter? }`: `sha256` must equal the current original
+source hash, `manifest` language/entry must match the source extension, and
+`interface` must be `argv` — or `native` only when an `adapter` is supplied.
+The override file itself is read under `read` permission with strict
+schema/hash/size bounds; stale hashes are refused. There is no CLI for this
+file, no new dependency, and no whole-project source autoload: only the exact
+listed `.blocks` path converts.
+
+```json
+{
+  "version": 1,
+  "entries": {
+    ".blocks/greet.py": {
+      "sha256": "<sha256 of .blocks/greet.py>",
+      "manifest": {
+        "version": 1, "name": "greet", "description": "...",
+        "language": "python", "interface": "argv", "entry": "main.py",
+        "params": { "verbose": { "type": "boolean" } },
+        "effects": "Prints a greeting.",
+        "legacy": { "argv": { "verbose": { "mode": "flag" } } }
+      }
+    }
+  }
+}
+```
+
+Optional `adapter: { source, sha256 }` carries a reviewed native bounded
+adaptation for sources that cannot run as-is under `argv` (language and entry
+still match the original; raw original hash and adapter hash are both
+checked; reruns compare the exact stored source, so edited runes report a
+conflict instead of overwriting). The serve-static pattern is the model: a
+legacy script that would listen forever is instead adapted to a bounded
+loopback lease — bind `127.0.0.1` (or `localhost`) for a bounded duration,
+close the listener, then return one JSON value containing `root`, `host`,
+`port`, `durationMs`, and `closed: true`. Port `0` requests an ephemeral port;
+callers may choose a known loopback port when composing concurrent probes.
+The returned port is no longer listening. It is still an unsandboxed native
+rune under the normal timeout/output bounds, not a persistent server.

@@ -38,6 +38,53 @@ if (json === undefined) throw new Error("Rune returned no JSON value");
 process.stdout.write(json);
 `;
 
+// Only the exact entry URL is replaced. Dependencies retain normal Node loading
+// and are trusted host code, not part of the approved entry snapshot.
+const legacyJavascriptWorker = `
+import * as nodeModule from "node:module";
+import { pathToFileURL } from "node:url";
+let text = "";
+for await (const chunk of process.stdin) text += chunk;
+const envelope = JSON.parse(text);
+if (typeof nodeModule.registerHooks !== "function") throw new Error("Legacy JavaScript requires Node registerHooks (Node >=22.15)");
+const entry = pathToFileURL(envelope.filename).href;
+process.argv = [process.execPath, envelope.filename, ...envelope.argv];
+nodeModule.registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier === entry) return { url: entry, format: envelope.format, shortCircuit: true };
+    return nextResolve(specifier, context);
+  },
+  load(url, context, nextLoad) {
+    if (url === entry) return { format: envelope.format, source: envelope.source, shortCircuit: true };
+    return nextLoad(url, context);
+  }
+});
+await import(entry);
+`;
+
+function encodeArgv(manifest: LoadedRune["manifest"], params: Record<string, string | number | boolean>): string[] {
+  if (manifest.interface !== "argv") return [];
+  const argv: string[] = [];
+  for (const [key, value] of Object.entries(params)) {
+    const encoding = manifest.legacy?.argv?.[key];
+    if (encoding?.mode === "flag") {
+      if (value === (encoding.when ?? true)) argv.push(`--${key}`);
+    } else if (encoding?.mode === "repeat-json") {
+      let values: unknown;
+      try { values = JSON.parse(value as string); }
+      catch { throw new RuneError("invalid_params", `param ${key}: expected JSON string array`); }
+      if (!Array.isArray(values) || !values.every(v => typeof v === "string")) {
+        throw new RuneError("invalid_params", `param ${key}: expected JSON string array`);
+      }
+      argv.push(...values.map(v => `--${key}=${v}`));
+    } else {
+      if (typeof value === "boolean") throw new RuneError("invalid_params", `param ${key}: ambiguous boolean argv encoding`);
+      argv.push(`--${key}=${String(value)}`);
+    }
+  }
+  return argv;
+}
+
 function abortError(): RuneError { return new RuneError("cancelled", "Rune execution was cancelled"); }
 
 export async function runRune(
@@ -57,25 +104,29 @@ export async function runRune(
     params[name] = await safePath(root, relative, { missing: true, any: true });
   }
   if (options.signal?.aborted) throw abortError();
-  if (manifest.interface === "argv" && manifest.language !== "python") {
-    throw new RuneError("unsupported", "Legacy argv execution currently supports Python only");
-  }
-  const executable = Bun.which(manifest.language === "python" ? "python3" : "bun");
+  const argv = encodeArgv(manifest, params);
+  const legacyJavascript = manifest.interface === "argv" && manifest.language !== "python";
+  if (legacyJavascript && !manifest.legacy) throw new RuneError("unsupported", "Legacy JavaScript requires original path provenance");
+  const executable = Bun.which(manifest.language === "python" ? "python3" : legacyJavascript ? "node" : "bun");
   if (!executable) throw new RuneError("runtime", "Required script interpreter is unavailable");
   const filename = manifest.legacy
     ? await safePath(root, manifest.legacy.path, { missing: true })
     : path.join(root, ".opencode", ".runes", manifest.name, manifest.entry);
-  const argv = manifest.interface === "argv"
-    ? Object.entries(params).map(([key, value]) => `--${key}=${String(value)}`) : [];
+  // .cjs is explicitly CommonJS; .js/.mjs/.ts legacy entries are ESM.
+  // Do not guess a format from source patterns or read mutable entry bytes.
+  const format = filename.endsWith(".cjs") ? "commonjs" : "module";
+  const snapshot = legacyJavascript && manifest.language === "typescript"
+    ? new Bun.Transpiler({ loader: "ts", target: "node" }).transformSync(source) : source;
   const args = manifest.language === "python"
     ? ["-I", "-c", pythonWorker]
+    : legacyJavascript ? ["--input-type=module", "--eval", legacyJavascriptWorker]
     : ["--config=/dev/null", "--no-env-file", "--no-macros", "--eval", javascriptWorker];
   const identity = JSON.stringify({ executable, project: root, name: manifest.name, sha256: hash, effects: manifest.effects, params });
   const metadata = { name: manifest.name, sha256: hash, effects: manifest.effects, params, executable, args, project: root };
   await options.authorize({ action: "bash", resources: [identity], metadata });
   await options.authorize({ action: "runes.run", resources: [identity], metadata });
   if (options.signal?.aborted) throw abortError();
-  const envelope = JSON.stringify({ source, params, filename, argv, language: manifest.language, legacy: !!manifest.legacy });
+  const envelope = JSON.stringify({ source: snapshot, params, filename, argv, format, language: manifest.language, legacy: !!manifest.legacy });
 
   return await new Promise((resolve, reject) => {
     const child = spawn(executable, args, { cwd: root, detached: true, stdio: ["pipe", "pipe", "pipe"] });

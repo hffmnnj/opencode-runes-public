@@ -236,18 +236,24 @@ describe("runtime_legacy_python", () => {
     expect(result.value).toEqual({ seed: "sibling-data", file: path.join(root, "legacy", "tool.py") });
   });
 
-  it("reports_non_python_legacy_argv_as_unsupported_before_authorizing", async () => {
+  it("rejects_argv_javascript_without_legacy_provenance_before_authorizing", async () => {
     const root = await makeRoot("runes-runtime-argvunsupported");
+    const sentinel = path.join(root, "side-effect.txt");
     const manifest = manifestFor({
       language: "javascript",
       entry: "main.js",
       interface: "argv",
-      legacy: { path: "legacy/tool.js", sha256: sha, format: "caveman-blocks" },
       params: { word: { type: "string", required: true } },
     });
+    const source = [
+      'import { writeFileSync } from "node:fs";',
+      `writeFileSync(${JSON.stringify(sentinel)}, "x");`,
+      'process.stdout.write("{}");',
+      "",
+    ].join("\n");
     let calls = 0;
     try {
-      await runRune(root, runeFor(manifest, "export default () => ({});"), { word: "hi" }, {
+      await runRune(root, runeFor(manifest, source), { word: "hi" }, {
         authorize: async () => {
           calls += 1;
         },
@@ -258,6 +264,7 @@ describe("runtime_legacy_python", () => {
       expect((error as RuneError).code).toBe("unsupported");
     }
     expect(calls).toBe(0);
+    expect(await exists(sentinel)).toBe(false);
   });
 });
 

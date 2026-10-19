@@ -34,9 +34,13 @@ external-directory authorization.
 
 ## Execution boundaries
 
-- Scripts run in a child process (`python3 -I` or `bun`), never inside the
-  OpenCode server process, never through a shell, from an approved in-memory
-  source snapshot — not by re-reading mutable files after authorization.
+- Scripts run in a child process (`python3 -I`, `bun`, or `node` for legacy
+  JS/TS), never inside the OpenCode server process, never through a shell,
+  from an approved in-memory source snapshot — not by re-reading mutable
+  files after authorization. Legacy JS/TS replaces only the exact entry URL
+  via Node `registerHooks` (Node >= 22.15 / 23.5); dependency specifiers and
+  the transpiled-TS snapshot aside, imports resolve normally through the host
+  and are not hashed or isolated.
 - Bounds: `run` stdout+stderr ≤ 64 KiB (excess kills the run with `output_limit`),
   distinct from the ≤ 256 KiB source bound returned by `inspect` with
   `includeSource: true`; the user catalog (`list`) reads manifests only and
@@ -58,12 +62,14 @@ external-directory authorization.
 ## Migration safety
 
 Conversion parses `.blocks` headers with `Bun.TOML.parse` only — legacy source
-is never evaluated during conversion. It is additive and idempotent:
+is never evaluated during conversion, including override-listed originals and
+adapter sources (adapter hash staleness is a refusal, not a fallback).
+It is additive and idempotent:
 originals preserved byte-for-byte, provenance recorded, existing rune names
-never overwritten (identical provenance reports `existing`, conflicts report
-`unsupported`), catalog and report sizes bounded. Lazy auto-conversion runs at
+never overwritten (identical provenance plus byte-identical source reports
+`existing`, conflicts report `unsupported`), catalog and report sizes bounded. Reviewed overrides live only in `.opencode/runes-migration.json` (version 1, exact `.blocks` paths, `{ sha256, manifest, adapter? }` with strict schema/hash/size checks and `read`-permission-gated loads): raw original hash and adapter hash are both verified, language/entry must match the original, `native` interface only with an `adapter`, and no whole-project autoload occurs. Lazy auto-conversion runs at
 most once per project and only on explicit `list`/`inspect`/`run` use, with
 edit authorization, and never executes converted scripts by itself.
-Unsupported inputs (non-Python scripts, ambiguous boolean encodings, unknown
+Unsupported inputs (unreviewed languages, ambiguous boolean encodings, unknown
 schemas) are reported with reasons, and historical stamps / `allow_effects`
 are never treated as trust.
