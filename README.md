@@ -89,11 +89,13 @@ Additive and lazy: originals under `.blocks/` are preserved byte-for-byte,
 provenance (path, SHA-256, header metadata) is recorded under
 `manifest.legacy`, existing rune names are never overwritten, and conflicts are
 reported as `unsupported` rather than guessed. Supported: Python `argv` scripts
-with a `# /// block` TOML header (str/int/float/bool/path scalar params).
-Unsupported and reported, not converted: non-Python scripts (JS/TS location
-semantics cannot be preserved), ambiguous boolean `argv` encodings, unknown
-schemas/fields, oversized headers, and non-script files (INDEX, configs,
-lockfiles, fixtures, caches). Stamps and `allow_effects` are never carried over
+with a `# /// block` TOML header (str/int/float/path scalar params; `bool`
+params need manual `argv` review and are reported unsupported, not converted).
+Recognized script extensions with unsupported formats are reported, not
+converted: non-Python scripts (JS/TS location semantics cannot be
+preserved), boolean `argv` encodings, unknown schemas/fields, and oversized
+headers. Non-script files (INDEX, configs, lockfiles, fixtures, caches) are
+ignored, never reported as unsupported. Stamps and `allow_effects` are never carried over
 as verification or authority.
 
 ## Dependencies and non-goals
@@ -107,9 +109,10 @@ as verification or authority.
 
 ## Installation and rollback (procedure)
 
-Installation and rollback are performed by the coordinator and recorded
-separately when they actually happen; this document states the procedure, not a
-claim that it is done.
+Installation and rollback are performed by the coordinator. Actual rollout
+state and backups are recorded in [docs/INSTALLATION.md](docs/INSTALLATION.md);
+primary implementation, integration, Caveman retirement, and independent
+post-install verification are complete.
 
 1. Install this plugin through the OpenCode V2 plugin API and verify Code Mode
    discovery of the `runes` namespace without interrupting unrelated sessions.
@@ -121,4 +124,4 @@ claim that it is done.
 4. Rollback: restore the archived adapter/symlink, restore the backed-up
    guidance, and remove or disable this plugin. Rune directories already
    created under project `.opencode/.runes/` are inert data and can be kept or
-   deleted per project.
+   moved aside reversibly per project (never bulk- or recursively deleted).

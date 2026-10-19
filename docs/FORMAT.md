@@ -105,10 +105,11 @@ not executable and are reported unsupported at migration time.
 Only immediate `.blocks/` files with script extensions are candidates; INDEX,
 configs, lockfiles, fixtures, and caches are ignored. Python files need a
 `# /// block` … `# ///` TOML comment header; types map `str` → `string`,
-`int` → `integer`, `float` → `number`, `bool` → `boolean`, `path` → `path`,
+`int` → `integer`, `float` → `number`, `path` → `path`,
 with `min`/`max`/`default`/`required` preserved and `help` becoming the param
-`description`. `example` is preserved as an argv string array. `stamp` and
+`description`. `bool` params are rejected pending manual `argv` review.
+`example` is preserved as an argv string array. `stamp` and
 `allow_effects` are dropped — never migrated as verification or authority.
-Anything else (unsupported extension, schema, field, boolean `argv` encoding
-ambiguity, oversize header) is reported in `unsupported[]`, never guessed.
+Anything else (unsupported script language, schema, field, any boolean param,
+oversize header) is reported in `unsupported[]`, never guessed.
 Originals are never modified; provenance goes in `manifest.legacy`.
