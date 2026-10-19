@@ -70,8 +70,11 @@ print(json.dumps({"message": f"hello {params['name']}"}))
 ```
 
 Console/log output in JS/TS goes to stderr; only the returned value becomes
-stdout. Legacy `argv` Python runes keep their original `--key=value` interface
-plus the original project-relative `__file__` (see FORMAT.md).
+stdout. Legacy `argv` runes keep their original command-line interface
+(default `--key=value`; reviewed `flag`/`repeat-json` mappings in
+`legacy.argv`, see FORMAT.md): Python keeps the original project-relative
+`__file__`, JS/TS keeps the original entry URL and `process.argv` under Node
+`registerHooks` (`.cjs` CommonJS, `.js`/`.mjs`/`.ts` ESM, `.ts` transpiled).
 
 Limits that shape rune design: execution must emit exactly one valid UTF-8 JSON
 value, default timeout 30 s (max 5 min), cancellation best-effort terminates
@@ -88,24 +91,34 @@ user-authorized trust, not hashed or pinned.
 Additive and lazy: originals under `.blocks/` are preserved byte-for-byte,
 provenance (path, SHA-256, header metadata) is recorded under
 `manifest.legacy`, existing rune names are never overwritten, and conflicts are
-reported as `unsupported` rather than guessed. Supported: Python `argv` scripts
-with a `# /// block` TOML header (str/int/float/path scalar params; `bool`
-params need manual `argv` review and are reported unsupported, not converted).
-Recognized script extensions with unsupported formats are reported, not
-converted: non-Python scripts (JS/TS location semantics cannot be
-preserved), boolean `argv` encodings, unknown schemas/fields, and oversized
-headers. Non-script files (INDEX, configs, lockfiles, fixtures, caches) are
+reported as `unsupported` rather than guessed. Headered unambiguous Python
+converts automatically (`# /// block` TOML header with str/int/float/path
+scalar params). Headerless files, JS/TS files, and `bool` params need a
+reviewed override in `.opencode/runes-migration.json` (version 1, exact
+`.blocks` path, `{ sha256, manifest }`, never executed): `flag` maps a boolean
+to a bare `--key` (for example `{ "mode": "flag" }` emits `--verbose` only
+when `verbose` is true; `{ "mode": "flag", "when": false }` emits `--quiet`
+only when `quiet` is false), `repeat-json` maps a string holding a JSON array
+of strings to repeated `--key=value`, and anything still ambiguous is refused
+without a reviewed mapping. An optional reviewed `adapter: { source, sha256 }`
+carries a native bounded adaptation (for example serve-static as a bounded
+loopback lease that exits with one JSON value, not a persistent server).
+Non-script files (INDEX, configs, lockfiles, fixtures, caches) are
 ignored, never reported as unsupported. Stamps and `allow_effects` are never carried over
 as verification or authority.
 
 ## Dependencies and non-goals
 
-- Requires Bun ≥ 1.4.2, Python 3.11+ for Python runes, and the native
+- Requires Bun ≥ 1.4.2, Python 3.11+ for Python runes, Node ≥ 22.15 / 23.5 for
+  legacy JS/TS runes (tested on 26.9 only), and the native
   `@opencode/plugin` API (no other runtime dependencies).
-- There is no CLI. There are no automatic verification stamps.
+- There is no CLI. There are no automatic verification stamps. Overrides are
+  exact-path entries only — no whole-project source autoload.
 - Native JS/TS runes execute from snapshotted source loaded as a data module,
   so there is no reliable relative file import or `import.meta` filesystem
   path; use node builtins and project `cwd` params instead (see FORMAT.md).
+  Legacy JS/TS is the exception: the exact entry snapshot runs under Node with
+  its original URL, while dependencies still resolve normally via the host.
 
 ## Installation and rollback (procedure)
 

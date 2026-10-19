@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { lstat, opendir } from 'node:fs/promises';
 import { isDeepStrictEqual } from 'node:util';
 import { join } from 'node:path';
-import { LIMITS, RuneError, validateManifest, type RuneManifest } from './contracts.ts';
+import { LIMITS, RuneError, entryFor, validateManifest, type Language, type RuneManifest } from './contracts.ts';
 import { readBounded, safePath } from './paths.ts';
 import { RuneStore } from './store.ts';
 
@@ -97,6 +97,65 @@ function missing(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';
 }
 
+type ReviewedAdapter = { source: string; sha256: string };
+type ReviewedOverride = { sha256: string; manifest: Record<string, unknown>; adapter?: ReviewedAdapter };
+const OVERRIDES_PATH = '.opencode/runes-migration.json';
+
+async function readOverrides(root: string, authorizeRead?: (resource: string) => Promise<void>): Promise<Map<string, ReviewedOverride>> {
+  try { await lstat(await safePath(root, OVERRIDES_PATH)); }
+  catch (error) { if (missing(error)) return new Map(); throw error; }
+  await authorizeRead?.(join(root, OVERRIDES_PATH));
+  let data: unknown;
+  try { data = JSON.parse(await readBounded(root, OVERRIDES_PATH, LIMITS.sourceBytes)); }
+  catch (error) { if (error instanceof SyntaxError) refuse('Invalid migration override JSON'); throw error; }
+  if (!record(data) || data.version !== 1 || Object.keys(data).some(k => k !== 'version' && k !== 'entries') || !record(data.entries)) {
+    refuse('Invalid migration override schema');
+  }
+  if (Object.keys(data.entries).length > LIMITS.catalogEntries) refuse('Too many migration overrides');
+  const entries = new Map<string, ReviewedOverride>();
+  for (const [key, value] of Object.entries(data.entries)) {
+    if (!/^\.blocks\/[^/\\\0]+\.(?:py|js|ts|mjs|cjs)$/.test(key) || !record(value)
+      || Object.keys(value).some(k => k !== 'sha256' && k !== 'manifest' && k !== 'adapter')
+      || typeof value.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(value.sha256) || !record(value.manifest)) {
+      refuse('Invalid migration override entry');
+    }
+    let adapter: ReviewedAdapter | undefined;
+    if (Object.hasOwn(value, 'adapter')) {
+      const supplied = value.adapter;
+      if (!record(supplied) || Object.keys(supplied).some(k => k !== 'source' && k !== 'sha256')
+        || typeof supplied.source !== 'string' || typeof supplied.sha256 !== 'string'
+        || !/^[a-f0-9]{64}$/.test(supplied.sha256)) refuse('Invalid migration adapter schema');
+      if (Buffer.byteLength(supplied.source, 'utf8') > LIMITS.sourceBytes) refuse('Migration adapter exceeds source size limit');
+      if (createHash('sha256').update(supplied.source, 'utf8').digest('hex') !== supplied.sha256) {
+        refuse('Stale migration adapter: source hash differs');
+      }
+      adapter = { source: supplied.source, sha256: supplied.sha256 };
+    }
+    entries.set(key, { sha256: value.sha256, manifest: value.manifest, ...(adapter === undefined ? {} : { adapter }) });
+  }
+  return entries;
+}
+
+function reviewedManifest(override: ReviewedOverride, source: string, path: string): RuneManifest {
+  const sha256 = createHash('sha256').update(source, 'utf8').digest('hex');
+  if (override.sha256 !== sha256) refuse('Stale migration override: source hash differs');
+  const language: Language = path.endsWith('.py') ? 'python' : path.endsWith('.ts') ? 'typescript' : 'javascript';
+  const supplied = override.manifest;
+  const requiredInterface = override.adapter === undefined ? 'argv' : 'native';
+  if (supplied.language !== language || supplied.entry !== entryFor(language) || supplied.interface !== requiredInterface) {
+    refuse(`Migration override must match source language, entry and ${requiredInterface} interface`);
+  }
+  const legacy = supplied.legacy;
+  if (legacy !== undefined && (!record(legacy) || (legacy.path !== undefined && legacy.path !== path)
+    || (legacy.sha256 !== undefined && legacy.sha256 !== sha256)
+    || (legacy.format !== undefined && legacy.format !== 'caveman-blocks'))) {
+    refuse('Migration override conflicts with source provenance');
+  }
+  const manifest = validateManifest({ ...supplied, legacy: { ...(legacy as Record<string, unknown> | undefined), path, sha256, format: 'caveman-blocks' } });
+  if (Buffer.byteLength(JSON.stringify(manifest)) > LIMITS.manifestBytes) refuse('Converted manifest exceeds size limit');
+  return manifest;
+}
+
 export async function migrateBlocks(root: string, options: {
   dryRun?: boolean;
   authorize: Authorization;
@@ -118,6 +177,7 @@ export async function migrateBlocks(root: string, options: {
     if (/\.(?:py|js|ts|mjs|cjs|sh|bash|rb|pl|ps1)$/.test(entry.name) && !entry.isDirectory()) candidates.push(entry.name);
   }
   candidates.sort();
+  const overrides = await readOverrides(root, options.authorizeRead);
   const store = new RuneStore(root, options.authorizeRead);
   const planned = new Set<string>();
   function unsupported(path: string, reason: string) {
@@ -129,18 +189,21 @@ export async function migrateBlocks(root: string, options: {
   }
   for (const filename of candidates) {
     const path = `.blocks/${filename}`;
-    if (!filename.endsWith('.py')) {
-      unsupported(path, 'Unsupported language: only Python argv location semantics are preserved');
+    if (!filename.endsWith('.py') && !overrides.has(path)) {
+      unsupported(path, 'Unsupported language without a reviewed migration override');
       continue;
     }
     let source: string;
+    let runeSource: string;
     let manifest: RuneManifest;
+    const override = overrides.get(path);
     await options.authorizeRead?.(join(root, path));
     try {
       source = await readBounded(root, path, LIMITS.sourceBytes);
       const info = await lstat(await safePath(root, path));
       if (info.size !== Buffer.byteLength(source, 'utf8')) refuse('Source decoding is not byte-preserving');
-      manifest = parseManifest(source, path);
+      manifest = override ? reviewedManifest(override, source, path) : parseManifest(source, path);
+      runeSource = override?.adapter?.source ?? source;
     } catch (error) {
       if (!(error instanceof RuneError)) throw error;
       unsupported(path, 'Source or header is unsupported: ' + (error.code === 'unsupported' ? error.message : error.code));
@@ -166,7 +229,7 @@ export async function migrateBlocks(root: string, options: {
       try {
         const current = await store.load(manifest.name);
         if (current.manifest.legacy?.path === path && current.manifest.legacy.sha256 === manifest.legacy!.sha256
-          && current.source === source && isDeepStrictEqual(current.manifest, manifest)) {
+          && current.source === runeSource && isDeepStrictEqual(current.manifest, manifest)) {
           result.existing.push(manifest.name);
           checkResult();
         } else unsupported(path, 'Rune name already exists with conflicting content or provenance');
@@ -183,10 +246,11 @@ export async function migrateBlocks(root: string, options: {
           join(root, '.opencode', '.runes', manifest.name, 'rune.json'),
           join(root, '.opencode', '.runes', manifest.name, manifest.entry),
         ],
-        metadata: { root, source: path, sha256: manifest.legacy!.sha256, effects: manifest.effects },
+        metadata: { root, source: path, sha256: manifest.legacy!.sha256, effects: manifest.effects,
+          ...(override?.adapter === undefined ? {} : { adapterSha256: override.adapter.sha256 }) },
       });
       try {
-        const saved = await store.save(manifest, source);
+        const saved = await store.save(manifest, runeSource);
         if (!saved.created) { result.existing.push(manifest.name); checkResult(); continue; }
       } catch (error) {
         if (!(error instanceof RuneError) || error.code !== 'exists') throw error;

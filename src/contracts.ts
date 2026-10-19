@@ -36,12 +36,15 @@ export interface Param {
 
 export type Params = Record<string, string | number | boolean>;
 
+export type LegacyArgvEncoding = { mode: "flag"; when?: boolean } | { mode: "repeat-json" };
+
 export interface RuneManifestLegacy {
   path: string;
   sha256: string;
   format: "caveman-blocks";
   example?: string[];
   metadata?: Record<string, unknown>;
+  argv?: Record<string, LegacyArgvEncoding>;
 }
 
 export interface RuneManifest {
@@ -82,7 +85,7 @@ const MANIFEST_KEYS = new Set([
 
 const PARAM_KEYS = new Set(["type", "required", "default", "enum", "min", "max", "description"]);
 
-const LEGACY_KEYS = new Set(["path", "sha256", "format", "example", "metadata"]);
+const LEGACY_KEYS = new Set(["path", "sha256", "format", "example", "metadata", "argv"]);
 
 const MAX_DESCRIPTION_CHARS = 1000;
 const MAX_EFFECTS_CHARS = 120;
@@ -286,7 +289,7 @@ function validateParamDef(key: string, input: unknown): Param {
   return result;
 }
 
-function validateLegacy(input: unknown): RuneManifestLegacy {
+function validateLegacy(input: unknown, params: Record<string, Param>): RuneManifestLegacy {
   if (!isPlainObject(input)) {
     fail("invalid_manifest", "legacy: must be an object");
   }
@@ -333,6 +336,24 @@ function validateLegacy(input: unknown): RuneManifestLegacy {
   };
   if (validatedExample !== undefined) result.example = validatedExample;
   if (validatedMetadata !== undefined) result.metadata = validatedMetadata;
+  if (input.argv !== undefined) {
+    if (!isPlainObject(input.argv)) fail("invalid_manifest", "legacy.argv: must be an object");
+    result.argv = {};
+    for (const [key, encoding] of Object.entries(input.argv)) {
+      if (!Object.hasOwn(params, key) || PROTOTYPE_KEYS.has(key) || !isPlainObject(encoding)) {
+        fail("invalid_manifest", "legacy.argv: expected an encoding for a declared parameter");
+      }
+      if (encoding.mode === "flag") {
+        if (params[key]!.type !== "boolean" || Object.keys(encoding).some(k => k !== "mode" && k !== "when")
+          || (encoding.when !== undefined && typeof encoding.when !== "boolean")) {
+          fail("invalid_manifest", "legacy.argv flag: expected boolean parameter and optional boolean when");
+        }
+        result.argv[key] = encoding.when === undefined ? { mode: "flag" } : { mode: "flag", when: encoding.when };
+      } else if (encoding.mode === "repeat-json" && params[key]!.type === "string" && Object.keys(encoding).length === 1) {
+        result.argv[key] = { mode: "repeat-json" };
+      } else fail("invalid_manifest", "legacy.argv: unsupported encoding or parameter type");
+    }
+  }
   return result;
 }
 
@@ -406,7 +427,14 @@ export function validateManifest(input: unknown): RuneManifest {
 
   let validatedLegacy: RuneManifestLegacy | undefined;
   if (legacy !== undefined) {
-    validatedLegacy = validateLegacy(legacy);
+    validatedLegacy = validateLegacy(legacy, validatedParams);
+  }
+  if (iface === "argv") {
+    for (const [key, def] of Object.entries(validatedParams)) {
+      if (def.type === "boolean" && validatedLegacy?.argv?.[key]?.mode !== "flag") {
+        fail("invalid_manifest", "Boolean argv encoding is ambiguous; explicit legacy.argv flag required");
+      }
+    }
   }
 
   const manifest: RuneManifest = {
