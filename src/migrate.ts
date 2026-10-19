@@ -100,6 +100,7 @@ function missing(error: unknown): boolean {
 export async function migrateBlocks(root: string, options: {
   dryRun?: boolean;
   authorize: Authorization;
+  authorizeRead?: (resource: string) => Promise<void>;
 }): Promise<MigrationResult> {
   const result: MigrationResult = { converted: [], existing: [], unsupported: [], dryRun: options.dryRun ?? true };
   let directory: Awaited<ReturnType<typeof opendir>>;
@@ -117,7 +118,7 @@ export async function migrateBlocks(root: string, options: {
     if (/\.(?:py|js|ts|mjs|cjs|sh|bash|rb|pl|ps1)$/.test(entry.name) && !entry.isDirectory()) candidates.push(entry.name);
   }
   candidates.sort();
-  const store = new RuneStore(root);
+  const store = new RuneStore(root, options.authorizeRead);
   const planned = new Set<string>();
   function unsupported(path: string, reason: string) {
     result.unsupported.push({ path, reason });
@@ -134,6 +135,7 @@ export async function migrateBlocks(root: string, options: {
     }
     let source: string;
     let manifest: RuneManifest;
+    await options.authorizeRead?.(join(root, path));
     try {
       source = await readBounded(root, path, LIMITS.sourceBytes);
       const info = await lstat(await safePath(root, path));
@@ -177,7 +179,10 @@ export async function migrateBlocks(root: string, options: {
     if (!result.dryRun) {
       // Permission failures propagate unchanged and cannot be mistaken for unsupported data.
       await options.authorize({
-        action: 'edit', resources: [join(root, '.opencode', '.runes', manifest.name, '*')],
+        action: 'edit', resources: [
+          join(root, '.opencode', '.runes', manifest.name, 'rune.json'),
+          join(root, '.opencode', '.runes', manifest.name, manifest.entry),
+        ],
         metadata: { root, source: path, sha256: manifest.legacy!.sha256, effects: manifest.effects },
       });
       try {

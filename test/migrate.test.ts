@@ -46,7 +46,7 @@ describe('migrateBlocks', () => {
     } });
     expect(report).toEqual({ converted: ['scalar-probe'], existing: [], unsupported: [], dryRun: false });
     expect(requests).toEqual([{
-      action: 'edit', resources: [join(root, '.opencode/.runes/scalar-probe/*')],
+      action: 'edit', resources: [join(root, '.opencode/.runes/scalar-probe/rune.json'), join(root, '.opencode/.runes/scalar-probe/main.py')],
       metadata: { root, source: '.blocks/probe.py', sha256: digest(source), effects: 'write-workspace' },
     }]);
     const loaded = await new RuneStore(root).load('scalar-probe');

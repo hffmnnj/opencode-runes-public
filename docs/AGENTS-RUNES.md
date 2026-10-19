@@ -1,0 +1,8 @@
+## Runes / OpenCode V2
+
+- Reusable scripts ("runes") live project-local at `.opencode/.runes/<name>/` (`rune.json` manifest plus `main.js`, `main.ts`, or `main.py`). There is no CLI, no global registry, and no generated catalog in AGENTS.
+- Reach runes only through Code Mode: inside `execute`, call `search` to discover the exact `runes.*` tool paths (`list`, `inspect`, `save`, `run`, `migrate`) and call those exact paths; never guess paths or shell out.
+- Before writing a new script, call `list` (bounded summaries, never source); call `inspect` with source only when you must read or reuse it. Save and run JS/TS/Python through the tools: native JS/TS export one default function taking params and returning one JSON value, Python reads params JSON on stdin and prints one JSON value.
+- Promote a helper to a rune when it repeats or materially shrinks bulky repeated output; keep params small and typed (string/number/integer/boolean/path, no coercion) and parameterize for reuse instead of copying variants. Every run answers exactly one bounded JSON value.
+- `save` is create-only (identical re-save reports `created: false`, anything else fails); change a rune under a new name or by manual reviewed file edit. Legacy `.blocks/` migration is lazy and additive: `migrate` defaults to dry-run preview, originals stay byte-for-byte, old index files, stamps, and `allow_effects` are never authority, and legacy Caveman-managed rules are migration input, not active CLI instructions.
+- Declared `effects` and path checks are authorization-time correctness info, not an OS sandbox; scripts run with user authority, so never bypass permission denials or represent runs as isolated.

@@ -141,7 +141,7 @@ function isErrno(err: unknown): err is NodeJS.ErrnoException {
 }
 
 export class RuneStore {
-  constructor(readonly root: string) {}
+  constructor(readonly root: string, private readonly authorizeRead?: (resource: string) => Promise<void>) {}
 
   async save(manifest: unknown, source: string): Promise<SaveResult> {
     const valid = validateManifest(manifest);
@@ -207,6 +207,7 @@ export class RuneStore {
     const clean = validateName(name);
     const dirRel = `${RUNES_BASE}/${clean}`;
     let manifestText: string;
+    await this.authorizeRead?.(`${this.root}/${dirRel}/${MANIFEST_FILE}`);
     try {
       manifestText = await readBounded(
         this.root,
@@ -237,6 +238,7 @@ export class RuneStore {
       );
     }
     let source: string;
+    await this.authorizeRead?.(`${this.root}/${dirRel}/${manifest.entry}`);
     try {
       source = await readBounded(
         this.root,
@@ -308,6 +310,10 @@ export class RuneStore {
     const matched: RuneSummary[] = [];
     let invalid = 0;
     for (const entryName of names) {
+      try { validateName(entryName); }
+      catch { invalid += 1; continue; }
+      // Keep permission failures outside the invalid-file recovery boundary.
+      await this.authorizeRead?.(`${this.root}/${RUNES_BASE}/${entryName}/${MANIFEST_FILE}`);
       let summary: RuneSummary;
       try {
         summary = await this.readSummary(entryName);
