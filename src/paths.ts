@@ -10,10 +10,13 @@ export async function projectRoot(directory: string): Promise<string> {
 }
 
 function components(relative: string): string[] {
-  if (typeof relative !== "string" || !relative || relative.includes("\0") || path.isAbsolute(relative)) {
+  if (typeof relative !== "string" || !relative || relative.includes("\0") || path.isAbsolute(relative) ||
+      (process.platform === "win32" && (path.win32.parse(relative).root !== "" || relative.includes(":")))) {
     throw new RuneError("path", "Expected a project-relative path");
   }
-  const parts = relative.split(path.sep);
+  // Windows accepts both separators. Splitting only on path.sep lets a
+  // forward-slash path hide traversal or a symlinked intermediate component.
+  const parts = relative.split(process.platform === "win32" ? /[\\/]/ : /\//);
   if (parts.some(part => !part || part === "..")) throw new RuneError("path", "Path traversal is not allowed");
   return parts.filter(part => part !== ".");
 }
