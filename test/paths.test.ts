@@ -1,15 +1,15 @@
 import { describe, expect, it } from "bun:test";
 import { lstat, mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { RuneError } from "../src/contracts.ts";
 import { ensureDirectory, projectRoot, readBounded, safePath } from "../src/paths.ts";
 
-// Owned scratch fixtures only. Partially written fixtures are retained and
-// never recursively deleted.
-const FIXTURE_BASE = "/var/tmp/example/opencode";
+// Owned scratch fixtures only, created under the system temporary directory.
+// Partially written fixtures are retained and never recursively deleted.
+const FIXTURE_BASE = tmpdir();
 
 async function makeRoot(prefix: string): Promise<string> {
-  await mkdir(FIXTURE_BASE, { recursive: true });
   return await mkdtemp(path.join(FIXTURE_BASE, `${prefix}-`));
 }
 

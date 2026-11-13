@@ -1,18 +1,16 @@
-// Store tests use isolated fixtures under /var/tmp/example/opencode.
+// Store tests use isolated fixtures created under the system temporary directory.
 import { describe, expect, test } from "bun:test";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { RuneStore } from "../src/store.ts";
 
 // LIMITS.sourceBytes per CONTRACT.md.
 const SOURCE_LIMIT = 262144;
 const HEX64 = /^[0-9a-f]{64}$/;
 
-let counter = 0;
-
 async function freshRoot(): Promise<string> {
-  const dir = `/var/tmp/example/opencode/runes-store-${process.pid}-${Date.now()}-${counter++}`;
-  await mkdir(dir, { recursive: true, mode: 0o755 });
-  return dir;
+  return await mkdtemp(join(tmpdir(), "runes-store-"));
 }
 
 function jsManifest(

@@ -181,7 +181,7 @@ Optional `adapter: { source, sha256 }` carries a reviewed native bounded
 adaptation for sources that cannot run as-is under `argv` (language and entry
 still match the original; raw original hash and adapter hash are both
 checked; reruns compare the exact stored source, so edited runes report a
-conflict instead of overwriting). The serve-static pattern is the model: a
+conflict instead of overwriting). The bounded server pattern is the model: a
 legacy script that would listen forever is instead adapted to a bounded
 loopback lease — bind `127.0.0.1` (or `localhost`) for a bounded duration,
 close the listener, then return one JSON value containing `root`, `host`,

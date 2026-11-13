@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { LIMITS } from '../src/contracts.ts';
 import { migrateBlocks } from '../src/migrate.ts';
@@ -18,7 +19,7 @@ function entry(changes: Record<string, unknown> = {}) {
   return { sha256: digest(original), manifest: reviewed, adapter: { source: adapted, sha256: digest(adapted) }, ...changes };
 }
 async function fixture() {
-  const root = await mkdtemp('/var/tmp/example/opencode/runes-adapter-');
+  const root = await mkdtemp(join(tmpdir(), 'runes-adapter-'));
   await mkdir(join(root, '.blocks'));
   await mkdir(join(root, '.opencode'));
   await writeFile(join(root, '.blocks/serve-static.mjs'), original);

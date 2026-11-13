@@ -1,7 +1,7 @@
 // Tools tests: drive the native Code Mode registration through a narrow
 // faithful adapter (session.get / permission.assert / tool.transform only)
 // against real RuneStore roots and the real runtime. Each test uses a unique
-// owned root under /var/tmp/example/opencode and never deletes anything.
+// owned root under the system temporary directory and never deletes anything.
 //
 // These tests prove the tools wiring contract (session-local roots,
 // permission identity and propagation, bounded RuneError output, lazy
@@ -9,6 +9,8 @@
 // that remains integration scope for the coordinator.
 import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Plugin } from "@opencode/plugin";
 import { RuneStore } from "../src/store.ts";
 import { registerTools } from "../src/tools.ts";
@@ -91,7 +93,7 @@ function makeContext(sessionDirs: Record<string, string>, deny?: (action: string
 }
 
 async function freshRoot(): Promise<string> {
-  return mkdtemp("/var/tmp/example/opencode/runes-tools-");
+  return mkdtemp(join(tmpdir(), "runes-tools-"));
 }
 
 function callContext(sessionID: string): CallContext {
