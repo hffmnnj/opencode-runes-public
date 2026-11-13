@@ -1,18 +1,17 @@
 import { describe, expect, it } from "bun:test";
 import { lstat, mkdir, mkdtemp, readdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { RuneError, validateManifest, type RuneManifest } from "../src/contracts.ts";
 import { runRune } from "../src/runtime.ts";
 import type { LoadedRune } from "../src/store.ts";
 
-// Owned scratch fixtures only. Fixtures are retained after the run and never
-// recursively deleted. Every execution below runs a real Bun/Python child
-// process owned by the runtime under test.
-const FIXTURE_BASE = "/var/tmp/example/opencode";
-
+// Owned scratch fixtures only, created under the system temporary directory.
+// Fixtures are retained after the run and never recursively deleted. Every
+// execution below runs a real Bun/Python child process owned by the runtime
+// under test.
 async function makeRoot(prefix: string): Promise<string> {
-  await mkdir(FIXTURE_BASE, { recursive: true });
-  return await mkdtemp(path.join(FIXTURE_BASE, `${prefix}-`));
+  return await mkdtemp(path.join(tmpdir(), `${prefix}-`));
 }
 
 async function exists(target: string): Promise<boolean> {

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { copyFile, lstat, mkdir, mkdtemp, readdir, readFile, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readdir, readFile, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { LIMITS, validateParams } from '../src/contracts.ts';
 import { migrateBlocks } from '../src/migrate.ts';
@@ -9,8 +10,10 @@ import { RuneStore } from '../src/store.ts';
 const authorize = async () => {};
 const digest = (source: string | Buffer) => createHash('sha256').update(source).digest('hex');
 
+// Owned scratch fixtures only, created under the system temporary directory.
+// Fixtures are retained after the run and never recursively deleted.
 async function fixture() {
-  const root = await mkdtemp('/var/tmp/example/opencode/runes-migrate-');
+  const root = await mkdtemp(join(tmpdir(), 'runes-migrate-'));
   await mkdir(join(root, '.blocks'));
   return root;
 }
@@ -129,7 +132,7 @@ describe('migrateBlocks', () => {
   });
 
   test('missing Blocks is an empty nonmutating preview', async () => {
-    const root = await mkdtemp('/var/tmp/example/opencode/runes-migrate-empty-');
+    const root = await mkdtemp(join(tmpdir(), 'runes-migrate-empty-'));
     expect(await migrateBlocks(root, { authorize })).toEqual({ converted: [], existing: [], unsupported: [], dryRun: true });
     expect(await readdir(root)).toEqual([]);
   });
@@ -170,50 +173,88 @@ describe('migrateBlocks', () => {
   });
 
   test('Blocks directory symlink is rejected rather than scanning its target', async () => {
-    const root = await mkdtemp('/var/tmp/example/opencode/runes-migrate-link-');
+    const root = await mkdtemp(join(tmpdir(), 'runes-migrate-link-'));
     const target = await fixture();
     await symlink(join(target, '.blocks'), join(root, '.blocks'));
     await expect(migrateBlocks(root, { authorize })).rejects.toMatchObject({ code: 'path' });
     expect(await readdir(root)).toEqual(['.blocks']);
   });
 
-  test('converts copied real project inventories, retaining original bytes and location dependencies', async () => {
-    const inventories = [
-      { directory: '/home/example/Documents/example-project-a/.blocks', total: 9, converted: 9 },
-      { directory: '/home/example/Documents/example-project-b/.blocks', names: ['property-retention-core.py'], total: 1, converted: 1 },
-      { directory: '/home/example/.config/opencode-v2/.blocks', total: 5, converted: 4 },
+  test('converts synthetic legacy inventories, retaining original bytes and provenance', async () => {
+    const inventories: Array<{
+      files: Array<[string, string]>;
+      converted: number;
+      unsupported?: Array<{ path: string; reason: string }>;
+    }> = [
+      {
+        files: [
+          ['alpha.py', python('alpha')],
+          ['beta.py', python('beta', 'ratio = { type = "float", default = 0.5, min = 0, max = 1 }')],
+          ['gamma.py', python('gamma', 'label = { type = "str", required = true, enum = ["left", "right"] }')],
+          ['delta.py', python('delta', 'input = { type = "path", required = true }')],
+        ],
+        converted: 4,
+      },
+      {
+        files: [['property-retention-core.py', python('property-retention-core')]],
+        converted: 1,
+      },
+      {
+        files: [
+          ['convert-one.py', python('convert-one')],
+          ['convert-two.py', python('convert-two', 'count = { type = "int", default = 2 }')],
+          ['convert-three.py', python('convert-three', 'label = { type = "str", default = "x" }')],
+          ['convert-four.py', python('convert-four', 'ratio = { type = "float", default = 1.0 }')],
+          ['static-bundle-activate.py', python('static-bundle-activate', 'flag = { type = "bool", default = false }')],
+        ],
+        converted: 4,
+        unsupported: [{
+          path: '.blocks/static-bundle-activate.py',
+          reason: 'Source or header is unsupported: Boolean argv encoding is ambiguous; manual conversion required',
+        }],
+      },
     ];
+
     for (const inventory of inventories) {
       const root = await fixture();
-      const names = inventory.names ?? (await readdir(inventory.directory)).filter(name => name.endsWith('.py')).sort();
-      expect(names).toHaveLength(inventory.total);
       const originals = new Map<string, Buffer<ArrayBuffer>>();
-      for (const name of names) {
-        const original = await readFile(join(inventory.directory, name));
-        originals.set(name, original);
-        await copyFile(join(inventory.directory, name), join(root, '.blocks', name));
+      for (const [name, source] of inventory.files) {
+        const bytes = Buffer.from(source);
+        originals.set(name, bytes);
+        await writeFile(join(root, '.blocks', name), bytes);
       }
+
       const preview = await migrateBlocks(root, { authorize });
       expect(preview.converted).toHaveLength(inventory.converted);
+      expect(preview.unsupported).toHaveLength(inventory.files.length - inventory.converted);
       expect(await readdir(root)).toEqual(['.blocks']);
+
       const applied = await migrateBlocks(root, { dryRun: false, authorize });
       expect(applied.converted).toEqual(preview.converted);
-      expect(applied.unsupported).toHaveLength(inventory.total - inventory.converted);
-      if (inventory.total === 5) {
-        expect(applied.unsupported).toEqual([{
-          path: '.blocks/static-bundle-activate.py', reason: 'Source or header is unsupported: Boolean argv encoding is ambiguous; manual conversion required',
-        }]);
+      expect(applied.unsupported).toHaveLength(inventory.files.length - inventory.converted);
+      if (inventory.unsupported !== undefined) {
+        expect(applied.unsupported).toEqual(inventory.unsupported);
       }
-      const repeated = await migrateBlocks(root, { dryRun: false, authorize: async () => { throw new Error('must not ask again'); } });
+
+      const repeated = await migrateBlocks(root, {
+        dryRun: false,
+        authorize: async () => { throw new Error('must not ask again'); },
+      });
       expect(repeated.existing).toEqual(applied.converted);
       expect(repeated.converted).toEqual([]);
-      for (const [name, bytes] of originals) {
-        expect(await readFile(join(root, '.blocks', name))).toEqual(bytes);
-        expect(await readFile(join(inventory.directory, name))).toEqual(bytes);
+
+      for (const [name] of inventory.files) {
+        expect(await readFile(join(root, '.blocks', name))).toEqual(originals.get(name)!);
       }
-      const first = await new RuneStore(root).load(applied.converted[0]!);
-      expect(first.manifest.legacy!.path).toBe(`.blocks/${applied.converted[0]}.py`);
-      expect(first.manifest.legacy!.sha256).toBe(digest(originals.get(`${applied.converted[0]}.py`)!));
+
+      for (const [filename, source] of inventory.files) {
+        const name = filename.replace(/\.py$/, '');
+        if (!applied.converted.includes(name)) continue;
+        const loaded = await new RuneStore(root).load(name);
+        expect(loaded.source).toBe(source);
+        expect(loaded.manifest.legacy!.path).toBe(`.blocks/${filename}`);
+        expect(loaded.manifest.legacy!.sha256).toBe(digest(source));
+      }
     }
   });
 });

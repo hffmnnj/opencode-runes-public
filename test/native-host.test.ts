@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 
 // This opt-in test owns a private database/server and never touches the shared service.
@@ -63,7 +64,7 @@ const PY_SOURCE = `import json, sys\nprint(json.dumps({"echo": json.load(sys.std
 
 test.skipIf(!binary)("built plugin serves runes tools end to end through a private probe RPC", async () => {
   if (!Bun.which("python3")) throw new Error("python3 is required for this test");
-  const root = await mkdtemp("/var/tmp/example/opencode/runes-native-");
+  const root = await mkdtemp(path.join(tmpdir(), "runes-native-"));
   const repo = path.resolve(import.meta.dir, "..");
   const workspace = path.join(root, "workspace");
   const workspaceB = path.join(root, "workspace-b");

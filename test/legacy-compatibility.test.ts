@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, readdir, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { validateManifest, type RuneManifest } from '../src/contracts.ts';
@@ -11,7 +12,7 @@ import { RuneStore } from '../src/store.ts';
 const allow = async () => {};
 const digest = (source: string) => createHash('sha256').update(source).digest('hex');
 async function fixture() {
-  const root = await mkdtemp('/var/tmp/example/opencode/runes-compat-');
+  const root = await mkdtemp(join(tmpdir(), 'runes-compat-'));
   await mkdir(join(root, '.blocks'));
   return root;
 }
