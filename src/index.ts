@@ -3,4 +3,4 @@ import { registerTools } from "./tools.ts";
 
 export { registerTools } from "./tools.ts";
 
-export default Plugin.define({ id: "opencode-runes", setup: registerTools });
+export default Plugin.define({ id: "hffmnnj.runes", setup: registerTools });

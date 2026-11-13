@@ -1,54 +1,129 @@
-# opencode-runes
+<p align="center">
+  <img src="https://unpkg.com/hffmnnj.runes/assets/banner.png" alt="Runes: project-local scripts as OpenCode Code Mode tools" width="100%">
+</p>
 
-Code Mode-only replacement for Caveman Blocks: small, project-local reusable
-scripts ("runes") executed through OpenCode V2 Code Mode tools. No CLI, no shell
-interception, no global registry.
+# Runes
 
-## Layout
+Project-local reusable scripts for OpenCode V2. Runes turns the small scripts a
+project keeps under `.opencode/.runes/` into typed Code Mode tools, so an agent
+can discover and run them by name instead of rebuilding the same one-off
+command.
 
-Each rune lives in the invoking project at:
+Storage and path params are scoped to the invoking project, and every operation
+is permission-gated. There is no CLI, no shell interception, and no global
+registry.
+
+## Install
+
+Requires OpenCode V2 and Bun 1.4.2 or newer. Add the package to your OpenCode
+config:
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": ["hffmnnj.runes"]
+}
+```
+
+The npm package and the plugin id are both `hffmnnj.runes`. OpenCode reloads the
+config on save.
+
+Runes registers one Code Mode namespace, `runes`, with five tools. They are
+reached through `execute` (use `search` inside Code Mode to discover the exact
+`tools.runes.*` paths), not through a shell command.
+
+## Quick start
+
+Save a rune once, then call it by name with typed params:
+
+```ts
+await tools.runes.save({
+  manifest: {
+    version: 1,
+    name: "text-preview",
+    description: "Length and first 500 characters of a project text file.",
+    language: "typescript",
+    interface: "native",
+    entry: "main.ts",
+    params: { path: { type: "path", required: true } },
+    effects: "Reads one project file.",
+  },
+  source: `export default async function (params: { path: string }) {
+  const text = await Bun.file(params.path).text();
+  return { characters: text.length, preview: text.slice(0, 500) };
+}`,
+});
+
+return await tools.runes.run({
+  name: "text-preview",
+  params: { path: "README.md" },
+});
+```
+
+`run` returns `{ name, value, durationMs }`, where `value` is the JSON value the
+rune produced. Params are validated before execution, and `path` params must
+stay inside the project.
+
+## Rune format
+
+Each rune lives at:
 
 ```
 .opencode/.runes/<name>/rune.json
 .opencode/.runes/<name>/main.js | main.ts | main.py
 ```
 
-`rune.json` is a validated manifest (version 1, name, description, language,
-`native` or `argv` interface, entry filename, typed params, effects string).
-See [docs/FORMAT.md](docs/FORMAT.md). Security boundaries are in
-[docs/SECURITY.md](docs/SECURITY.md).
+`rune.json` is a version 1 manifest with an exact key set:
+
+```json
+{
+  "version": 1,
+  "name": "json-peek",
+  "description": "Shape of a JSON file: keys, row count, one sample.",
+  "language": "python",
+  "interface": "native",
+  "entry": "main.py",
+  "params": {
+    "path": { "type": "path", "required": true },
+    "depth": { "type": "integer", "default": 2, "min": 1, "max": 5 }
+  },
+  "effects": "Reads one project file.",
+  "timeoutMs": 30000
+}
+```
+
+- `name` matches `[a-z][a-z0-9-]{0,63}`. The entry filename must match the
+  language: `javascript` → `main.js`, `typescript` → `main.ts`, `python` →
+  `main.py`.
+- Param types are `string`, `number`, `integer`, `boolean`, and `path`, with
+  `required`, `default`, `enum`, and numeric or length `min`/`max` as
+  applicable. Values are never coerced: a string `"2"` is not an integer `2`.
+- `effects` is a short declaration (max 120 chars) shown at authorization
+  time. It is not a sandbox.
+- Size caps: manifest ≤ 32 KiB canonical JSON, source ≤ 256 KiB, valid UTF-8.
+
+The full schema, parameter rules, and legacy `argv` encodings are documented in
+[FORMAT.md](https://unpkg.com/hffmnnj.runes/docs/FORMAT.md).
 
 ## Tools
 
-Five tools in the `runes` Code Mode namespace: `list`, `inspect`, `save`, `run`,
-`migrate`. They are Code Mode tools, so agents reach them through `execute`
-(using `search` inside Code Mode to discover the exact `runes.*` paths), not
-through a shell command.
+| Tool | Purpose |
+| --- | --- |
+| `runes.list` | Bounded summaries (`name`, `description`, `language`, `effects`) with optional query/offset/limit. Reads manifests only; never loads or returns source. |
+| `runes.inspect` | Manifest plus content hash. Returns source (up to the 256 KiB source bound) only with `includeSource: true`. |
+| `runes.save` | Create-only. Input is `{ manifest, source }`. An existing name is never overwritten: a save with the same manifest and source reports `created: false`; anything else fails with `exists`. |
+| `runes.run` | Input is `{ name, params }`. Validates params, executes in a separate child process, and returns the rune's single JSON value. |
+| `runes.migrate` | Explicit conversion of legacy `.blocks` files. Defaults to `dryRun: true`; previews without writes or edit permission. |
 
-- `list` — bounded summaries (`name`, `description`, `language`, `effects`),
-  with optional query/offset/limit. Reads manifests only; never loads or
-  returns source.
-- `inspect` — manifest plus content hash. Returns source (up to the 256 KiB
-  source bound) only when called with
-  `includeSource: true`.
-- `save` — create-only. Input is `{ manifest, source }`. An existing name is
-  never overwritten: an identical save reports `created: false`, anything else
-  fails with `exists`. **v0.1 has no update path:** to change a rune, save
-  under a new name or make a manual, reviewed file edit.
-- `run` — input is `{ name, params }`. Params are validated, defaults applied,
-  unknown params rejected, outside-project path params rejected (no
-  external-directory permission), no type coercion. Keep params small and
-  results small: manifests ≤ 32 KiB, sources ≤ 256 KiB, `run` stdout+stderr ≤
-  64 KiB (separate from the `inspect includeSource` source bound),
-  catalog ≤ 1000 entries, list pages ≤ 50.
-- `migrate` — explicit conversion of legacy `.blocks` files. Defaults to
-  `dryRun: true` (preview, no writes, no edit permission). Lazy automatic
-  migration may run once per project on explicit `list`/`inspect`/`run` use
-  only, permission-gated, and never executes converted scripts.
+Catalog limits: at most 1000 entries, list pages at most 50, `run`
+stdout+stderr at most 64 KiB, default timeout 30 seconds, maximum 5 minutes.
+
+There is no update path in this version. To change a rune, save it under a new
+name or make a reviewed file edit.
 
 ## Writing a rune
 
-Native JS/TS entries export one default function that receives the validated
+Native JS/TS entries export one default function. It receives the validated
 params object and returns a JSON value:
 
 ```ts
@@ -58,8 +133,8 @@ export default async function (params: { greeting: string; count: number }) {
 }
 ```
 
-Native Python entries read the same params object from stdin and print exactly
-one JSON value to stdout:
+Native Python entries read the params object from stdin and print exactly one
+JSON value to stdout:
 
 ```python
 # main.py
@@ -69,72 +144,78 @@ params = json.load(sys.stdin)
 print(json.dumps({"message": f"hello {params['name']}"}))
 ```
 
-Console/log output in JS/TS goes to stderr; only the returned value becomes
-stdout. Legacy `argv` runes keep their original command-line interface
-(default `--key=value`; reviewed `flag`/`repeat-json` mappings in
-`legacy.argv`, see FORMAT.md): Python keeps the original project-relative
-`__file__`, JS/TS keeps the original entry URL and `process.argv` under Node
-`registerHooks` (`.cjs` CommonJS, `.js`/`.mjs`/`.ts` ESM, `.ts` transpiled).
+Console output in JS/TS goes to stderr; only the returned value becomes the
+result. A run succeeds only with exactly one valid UTF-8 JSON value. Invalid
+JSON, non-UTF-8 output, or a nonzero exit fails clearly.
 
-Limits that shape rune design: execution must emit exactly one valid UTF-8 JSON
-value, default timeout 30 s (max 5 min), cancellation best-effort terminates
-the owned process group (scripts that deliberately escape the group, for
-example via `setsid`, are not contained — no absolute no-survivors claim).
-`effects` (max 120 chars) is a declaration shown at authorization time,
-not a sandbox — scripts run unsandboxed with the user's authority: they
-inherit the host environment (no automatic `.env` loading; the environment
-is not a secret boundary) and arbitrary imports/dependencies are
-user-authorized trust, not hashed or pinned.
+Native JS/TS source runs from an in-memory snapshot as a data module, so there
+is no reliable relative file import and no meaningful `import.meta` filesystem
+path. Use Node builtins and `path` params resolved against the project working
+directory instead.
+
+## Security
+
+Runes is not a sandbox. Scripts run unsandboxed with the user's authority: they
+inherit the host environment (no `.env` file is loaded automatically), can read
+environment variables and arbitrary files the user can access, import arbitrary
+modules, and start detached processes. Save and run only source you trust.
+Arbitrary imports and transitive dependencies are user-authorized trust, not
+hashed or pinned; only the manifest plus entry source are content-hashed.
+
+Before execution, `run` requires both `bash` and `runes.run` permission, each
+carrying the full execution identity (interpreter, project root, rune name,
+content hash, declared effects, and actual params). Denial of either prevents
+execution. `save` and applied migration require `edit` permission for the
+destination paths before mutation; reading rune files requires `read`
+permission for those exact files.
+
+Rune storage cannot escape the invoking project: absolute paths, `..`
+components, and symlinks beneath the root are rejected. Declared path params
+receive the same confinement; outside-project values are rejected, not
+authorized, and there is no external-directory permission. Cancellation is
+best-effort: SIGTERM goes to the owned process group with SIGKILL escalation,
+but scripts that deliberately escape the group (for example with `setsid`) are
+not contained.
+
+The full threat model and enforcement boundaries are in
+[SECURITY.md](https://unpkg.com/hffmnnj.runes/docs/SECURITY.md).
 
 ## Migration from Caveman Blocks
 
-Additive and lazy: originals under `.blocks/` are preserved byte-for-byte,
-provenance (path, SHA-256, header metadata) is recorded under
+Migration is additive and lazy. Originals under `.blocks/` are preserved
+byte-for-byte, provenance (path, SHA-256, header metadata) is recorded under
 `manifest.legacy`, existing rune names are never overwritten, and conflicts are
-reported as `unsupported` rather than guessed. Headered unambiguous Python
-converts automatically (`# /// block` TOML header with str/int/float/path
-scalar params). Headerless files, JS/TS files, and `bool` params need a
-reviewed override in `.opencode/runes-migration.json` (version 1, exact
-`.blocks` path, `{ sha256, manifest }`, never executed): `flag` maps a boolean
-to a bare `--key` (for example `{ "mode": "flag" }` emits `--verbose` only
-when `verbose` is true; `{ "mode": "flag", "when": false }` emits `--quiet`
-only when `quiet` is false), `repeat-json` maps a string holding a JSON array
-of strings to repeated `--key=value`, and anything still ambiguous is refused
-without a reviewed mapping. An optional reviewed `adapter: { source, sha256 }`
-carries a native bounded adaptation (for example serve-static as a bounded
-loopback lease that exits with one JSON value, not a persistent server).
-Non-script files (INDEX, configs, lockfiles, fixtures, caches) are
-ignored, never reported as unsupported. Stamps and `allow_effects` are never carried over
-as verification or authority.
+reported as `unsupported` rather than guessed. Lazy automatic migration may run
+once per project on explicit `list`, `inspect`, or `run` use, permission-gated,
+and never executes converted scripts.
 
-## Dependencies and non-goals
+Headered unambiguous Python converts automatically: a `# /// block` TOML header
+with `str`, `int`, `float`, or `path` scalar params. Headerless files, JS/TS
+files, and `bool` params need a reviewed override in
+`.opencode/runes-migration.json` (version 1, exact `.blocks` path,
+`{ sha256, manifest }`, never executed). Reviewed `legacy.argv` mappings handle
+booleans as bare flags and string arrays as repeated `--key=value` pairs. An
+optional reviewed `adapter: { source, sha256 }` can carry a bounded native
+adaptation, such as a legacy server script converted to a loopback lease that
+returns one JSON value instead of running forever.
 
-- Requires Bun ≥ 1.4.2, Python 3.11+ for Python runes, Node ≥ 22.15 / 23.5 for
-  legacy JS/TS runes (tested on 26.9 only), and the native
-  `@opencode/plugin` API (no other runtime dependencies).
-- There is no CLI. There are no automatic verification stamps. Overrides are
-  exact-path entries only — no whole-project source autoload.
-- Native JS/TS runes execute from snapshotted source loaded as a data module,
-  so there is no reliable relative file import or `import.meta` filesystem
-  path; use node builtins and project `cwd` params instead (see FORMAT.md).
-  Legacy JS/TS is the exception: the exact entry snapshot runs under Node with
-  its original URL, while dependencies still resolve normally via the host.
+Non-script files (INDEX, configs, lockfiles, fixtures, caches) are ignored, and
+historical stamps or `allow_effects` are never carried over as verification or
+authority. Dry-run `migrate` is the safe way to preview a project before
+applying it.
 
-## Installation and rollback (procedure)
+## Limits and non-goals
 
-Installation and rollback are performed by the coordinator. Actual rollout
-state and backups are recorded in [docs/INSTALLATION.md](docs/INSTALLATION.md);
-primary implementation, integration, Caveman retirement, and independent
-post-install verification are complete.
-
-1. Install this plugin through the OpenCode V2 plugin API and verify Code Mode
-   discovery of the `runes` namespace without interrupting unrelated sessions.
-2. Before replacing anything: archive (do not delete) the global Caveman
-   adapter and command symlink, and back up AGENTS/config guidance.
-3. Only after tests plus independent acceptance/security review pass, remove the
-   active Caveman managed section from global guidance and describe the Runes
-   tools accurately.
-4. Rollback: restore the archived adapter/symlink, restore the backed-up
-   guidance, and remove or disable this plugin. Rune directories already
-   created under project `.opencode/.runes/` are inert data and can be kept or
-   moved aside reversibly per project (never bulk- or recursively deleted).
+- Bun ≥ 1.4.2 is required. Python runes need Python 3.11 or newer. Legacy
+  JS/TS `argv` runes need Node ≥ 22.15 or 23.5 (tested on Node 26.9 only). The
+  native `@opencode/plugin` API is the only runtime dependency.
+- No CLI, no automatic verification stamps, and no global registry. Migration
+  overrides are exact-path entries only; there is no whole-project source
+  autoload.
+- Native JS/TS runes execute from a snapshotted data module, so relative file
+  imports and `import.meta` filesystem paths are not reliable. Legacy JS/TS
+  `argv` runes are the exception: the exact entry snapshot runs under Node with
+  its original URL, while dependencies resolve normally through the host.
+- Execution is bounded by the 64 KiB run output cap and the timeout above.
+  Process-group cleanup is best-effort; there is no absolute no-survivors
+  guarantee.
