@@ -1,12 +1,23 @@
 {
-  "name": "opencode-runes",
+  "name": "hffmnnj.runes",
   "version": "0.1.0",
-  "private": true,
+  "description": "Project-local reusable scripts for OpenCode V2, exposed as typed Code Mode tools.",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hffmnnj/opencode-runes.git"
+  },
+  "homepage": "https://unpkg.com/hffmnnj.runes/README.md",
+  "bugs": {
+    "url": "https://github.com/hffmnnj/opencode-runes/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "exports": {
     ".": "./dist/index.js"
   },
-  "files": ["dist", "README.md"],
+  "files": ["dist", "README.md", "assets/banner.png", "docs/FORMAT.md", "docs/SECURITY.md"],
   "engines": {
     "bun": ">=1.4.2"
   },
@@ -23,6 +34,7 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "build": "bun build ./src/index.ts --outdir ./dist --target bun --external '@opencode/*'",
+    "prepack": "bun run build",
     "check": "bun run typecheck && bun test && bun run build"
   }
 }
